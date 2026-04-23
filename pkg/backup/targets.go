@@ -449,8 +449,27 @@ func selectTargets(
 		}
 	}
 
+	restoresSystemTable := false
+	for _, desc := range matched.Descs {
+		if desc.GetParentID() == keys.SystemDatabaseID {
+			restoresSystemTable = true
+			break
+		}
+	}
+
+	hasZonesTable := false
+	for _, desc := range allDescs {
+		if desc.GetID() == keys.ZonesTableID {
+			hasZonesTable = true
+			break
+		}
+	}
+
 	setupTempDB := setupTempDBNonClusterRestore(
-		p.ExecCfg().Settings.Version.ActiveVersion(ctx).Version, descriptorCoverage, matched.Descs, allDescs,
+		p.ExecCfg().Settings.Version.ActiveVersion(ctx).Version,
+		descriptorCoverage,
+		restoresSystemTable,
+		hasZonesTable,
 	)
 	if setupTempDB {
 		for _, desc := range allDescs {
@@ -462,6 +481,25 @@ func selectTargets(
 	}
 
 	return matched.Descs, matched.RequestedDBs, matched.DescsByTablePattern, nil, setupTempDB, nil
+}
+
+func setupTempDBNonClusterRestore(
+	clusterVersion roachpb.Version,
+	restoreCoverage tree.DescriptorCoverage,
+	restoresSystemTable bool,
+	hasZonesTable bool,
+) bool {
+	if clusterVersion.Less(clusterversion.V26_2.Version()) {
+		return false
+	}
+	if restoreCoverage != tree.RequestedDescriptors {
+		// tempDB logic handled elswhere
+		return false
+	}
+	if restoresSystemTable {
+		return false
+	}
+	return hasZonesTable
 }
 
 // filterTempSystemDBDescriptors filters out temporary system databases (those
@@ -501,35 +539,6 @@ func filterTempSystemDBDescriptors(
 	}
 
 	return filteredDescs, filteredDBs
-}
-
-func setupTempDBNonClusterRestore(
-	clusterVersion roachpb.Version,
-	restoreCoverage tree.DescriptorCoverage,
-	matchedDescs []catalog.Descriptor,
-	allDescs []catalog.Descriptor,
-) bool {
-	if clusterVersion.Less(clusterversion.V26_2.Version()) {
-		return false
-	}
-	if restoreCoverage != tree.RequestedDescriptors {
-		// tempDB logic handled elswhere
-		return false
-	}
-
-	for _, desc := range matchedDescs {
-		// If we're explicitly restoring a system table, don't use temp db.
-		if desc.GetParentID() == keys.SystemDatabaseID {
-			return false
-		}
-	}
-
-	for _, desc := range allDescs {
-		if desc.GetID() == keys.ZonesTableID {
-			return true
-		}
-	}
-	return false
 }
 
 // EntryFiles is a group of sst files of a backup table range
