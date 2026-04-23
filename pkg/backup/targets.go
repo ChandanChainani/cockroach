@@ -449,7 +449,9 @@ func selectTargets(
 		}
 	}
 
-	setupTempDB := setupTempDBNonClusterRestore(p.ExecCfg().Settings.Version.ActiveVersion(ctx).Version, descriptorCoverage, lastBackupManifest.DescriptorCoverage, matched.Descs)
+	setupTempDB := setupTempDBNonClusterRestore(
+		p.ExecCfg().Settings.Version.ActiveVersion(ctx).Version, descriptorCoverage, matched.Descs, allDescs,
+	)
 	if setupTempDB {
 		for _, desc := range allDescs {
 			if desc.GetID() == keys.ZonesTableID {
@@ -504,18 +506,14 @@ func filterTempSystemDBDescriptors(
 func setupTempDBNonClusterRestore(
 	clusterVersion roachpb.Version,
 	restoreCoverage tree.DescriptorCoverage,
-	backupCoverage tree.DescriptorCoverage,
 	matchedDescs []catalog.Descriptor,
+	allDescs []catalog.Descriptor,
 ) bool {
 	if clusterVersion.Less(clusterversion.V26_2.Version()) {
 		return false
 	}
 	if restoreCoverage != tree.RequestedDescriptors {
 		// tempDB logic handled elswhere
-		return false
-	}
-	if backupCoverage != tree.AllDescriptors {
-		// Unable to restore system tables without cluster backup
 		return false
 	}
 
@@ -525,7 +523,13 @@ func setupTempDBNonClusterRestore(
 			return false
 		}
 	}
-	return true
+
+	for _, desc := range allDescs {
+		if desc.GetID() == keys.ZonesTableID {
+			return true
+		}
+	}
+	return false
 }
 
 // EntryFiles is a group of sst files of a backup table range

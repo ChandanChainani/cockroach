@@ -20,6 +20,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/featureflag"
 	"github.com/cockroachdb/cockroach/pkg/jobs"
 	"github.com/cockroachdb/cockroach/pkg/jobs/jobspb"
+	"github.com/cockroachdb/cockroach/pkg/keys"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/settings"
 	"github.com/cockroachdb/cockroach/pkg/sql"
@@ -91,6 +92,22 @@ func resolveOptionsForBackupJobDescription(
 	}
 
 	return newOpts, nil
+}
+
+func shouldIncludeZoneConfigsInRequestedBackup(targetDescs []catalog.Descriptor) bool {
+	for _, desc := range targetDescs {
+		switch desc := desc.(type) {
+		case catalog.DatabaseDescriptor:
+			if desc.GetID() != keys.SystemDatabaseID {
+				return true
+			}
+		case catalog.TableDescriptor:
+			if desc.GetParentID() != keys.SystemDatabaseID {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // GetRedactedBackupNode returns a copy of the argument `backup`, but with all
@@ -574,6 +591,24 @@ func backupPlanHook(
 		err = checkPrivilegesForBackup(ctx, backupStmt, p, targetDescs, to)
 		if err != nil {
 			return err
+		}
+
+		if backupStmt.Coverage() == tree.RequestedDescriptors &&
+			shouldIncludeZoneConfigsInRequestedBackup(targetDescs) {
+			allDescs, err := backupresolver.LoadAllDescs(ctx, p.ExecCfg(), endTime)
+			if err != nil {
+				return err
+			}
+			idsToInclude := map[descpb.ID]struct{}{
+				keys.SystemDatabaseID:     {},
+				keys.SystemPublicSchemaID: {},
+				keys.ZonesTableID:         {},
+			}
+			for _, desc := range allDescs {
+				if _, ok := idsToInclude[desc.GetID()]; ok {
+					targetDescs = append(targetDescs, desc)
+				}
+			}
 		}
 
 		// Check that a node will currently be able to run this before we create it.

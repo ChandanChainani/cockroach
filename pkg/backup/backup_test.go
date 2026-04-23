@@ -11888,11 +11888,9 @@ func testZoneConfigDownload(
 		"zone config should contain the expected gc.ttlseconds value")
 }
 
-// TestRestoreDownloadsZoneConfig verifies that when restoring a
-// database/table from a backup that contains the zones table, the restore creates
-// the temporary system database and downloads the zones table into it.
-// testZoneConfigDownload verifies that a restore operation downloads zone configs
-// into a temporary system database.
+// TestRestoreDownloadsZoneConfig verifies that restores download and reapply the
+// relevant rows from system.zones when the source backup contains zone config
+// metadata.
 func TestRestoreDownloadsZoneConfig(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
@@ -11903,18 +11901,33 @@ func TestRestoreDownloadsZoneConfig(t *testing.T) {
 
 	sqlDB.Exec(t, `ALTER TABLE data.bank CONFIGURE ZONE USING gc.ttlseconds = 7200`)
 
-	sqlDB.Exec(t, `BACKUP INTO 'nodelocal://1/test'`)
+	sqlDB.Exec(t, `BACKUP INTO 'nodelocal://1/test-cluster'`)
 
-	t.Run("database-restore", func(t *testing.T) {
+	t.Run("cluster-backup-database-restore", func(t *testing.T) {
 		testZoneConfigDownload(t, sqlDB,
-			`RESTORE DATABASE data FROM LATEST IN 'nodelocal://1/test' WITH new_db_name = 'data2', detached`,
+			`RESTORE DATABASE data FROM LATEST IN 'nodelocal://1/test-cluster' WITH new_db_name = 'data2', detached`,
 			"data2.bank")
 	})
 
-	t.Run("table-restore", func(t *testing.T) {
+	t.Run("cluster-backup-table-restore", func(t *testing.T) {
 		sqlDB.Exec(t, `CREATE DATABASE data3`)
 		testZoneConfigDownload(t, sqlDB,
-			`RESTORE TABLE data.bank FROM LATEST IN 'nodelocal://1/test' WITH into_db = 'data3', detached`,
+			`RESTORE TABLE data.bank FROM LATEST IN 'nodelocal://1/test-cluster' WITH into_db = 'data3', detached`,
 			"data3.bank")
+	})
+
+	t.Run("database-backup-database-restore", func(t *testing.T) {
+		sqlDB.Exec(t, `BACKUP DATABASE data INTO 'nodelocal://1/test-db'`)
+		testZoneConfigDownload(t, sqlDB,
+			`RESTORE DATABASE data FROM LATEST IN 'nodelocal://1/test-db' WITH new_db_name = 'data4', detached`,
+			"data4.bank")
+	})
+
+	t.Run("table-backup-table-restore", func(t *testing.T) {
+		sqlDB.Exec(t, `BACKUP TABLE data.bank INTO 'nodelocal://1/test-table'`)
+		sqlDB.Exec(t, `CREATE DATABASE data5`)
+		testZoneConfigDownload(t, sqlDB,
+			`RESTORE TABLE data.bank FROM LATEST IN 'nodelocal://1/test-table' WITH into_db = 'data5', detached`,
+			"data5.bank")
 	})
 }
