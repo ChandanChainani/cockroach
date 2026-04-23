@@ -118,6 +118,8 @@ type SQLStatsIngester struct {
 
 	metrics Metrics
 
+	discardedStatsCount *metric.Counter
+
 	statementStore *statementstore.StatementStore
 }
 
@@ -372,6 +374,7 @@ func NewSQLStatsIngester(
 	knobs *sqlstats.TestingKnobs,
 	metrics Metrics,
 	parentMon *mon.BytesMonitor,
+	discardedStatsCount *metric.Counter,
 	statementStore *statementstore.StatementStore,
 	sinks ...SQLStatsSink,
 ) *SQLStatsIngester {
@@ -390,6 +393,7 @@ func NewSQLStatsIngester(
 		settings:              st,
 		testingKnobs:          knobs,
 		metrics:               metrics,
+		discardedStatsCount:   discardedStatsCount,
 		statementStore:        statementStore,
 	}
 
@@ -453,9 +457,9 @@ func (i *SQLStatsIngester) processStatement(
 ) {
 	stmtSize := statement.Size()
 	if err := i.acc.Grow(ctx, stmtSize); err != nil {
-		// If we hit memory limits, we cannot buffer this statement.
-		// The error will propagate through the SQL memory pool accounting,
-		// causing queries to fail with "budget exceeded error" when the pool is exhausted.
+		if i.discardedStatsCount != nil {
+			i.discardedStatsCount.Inc(1)
+		}
 		return
 	}
 	i.stmtSizes[statement.SessionID] += stmtSize
